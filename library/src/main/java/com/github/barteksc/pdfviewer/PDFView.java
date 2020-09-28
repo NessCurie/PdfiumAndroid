@@ -24,15 +24,13 @@ import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Paint;
 import android.graphics.Paint.Style;
 import android.graphics.PaintFlagsDrawFilter;
-import android.graphics.Path;
 import android.graphics.PointF;
-import android.graphics.PorterDuff;
-import android.graphics.PorterDuffXfermode;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.AsyncTask;
+import android.os.Build;
 import android.os.HandlerThread;
 import android.util.AttributeSet;
 import android.util.Log;
@@ -158,6 +156,11 @@ public class PDFView extends RelativeLayout {
     private float zoom = 1f;
 
     /**
+     * The zoom is can
+     */
+    private boolean canZoom = true;
+
+    /**
      * True if the PDFView has been recycled
      */
     private boolean recycled = true;
@@ -175,7 +178,7 @@ public class PDFView extends RelativeLayout {
     /**
      * The thread {@link #renderingHandler} will run on
      */
-    private final HandlerThread renderingHandlerThread;
+    private HandlerThread renderingHandlerThread;
     /**
      * Handler always waiting in the background and rendering tasks
      */
@@ -199,6 +202,8 @@ public class PDFView extends RelativeLayout {
      * Policy for fitting pages to screen
      */
     private FitPolicy pageFitPolicy = FitPolicy.WIDTH;
+
+    private boolean fitEachPage = false;
 
     private int defaultPage = 0;
 
@@ -285,12 +290,6 @@ public class PDFView extends RelativeLayout {
      */
     private Configurator waitingDocumentConfigurator;
 
-    public float[] radii = {0, 0, 0, 0, 0, 0, 0, 0};  // top-left, top-right, bottom-right, bottom-left
-    public Path mClipPath;                            // 剪裁区域路径
-    public Paint mPaint;                              // 画笔
-    public int mEdgeFix = 10;                        // 边缘修复
-    public RectF mLayer;                             // 画布图层大小
-
     /**
      * Construct the initial view
      */
@@ -309,18 +308,11 @@ public class PDFView extends RelativeLayout {
         pagesLoader = new PagesLoader(this);
 
         paint = new Paint();
-        paint.setAntiAlias(true);
         debugPaint = new Paint();
         debugPaint.setStyle(Style.STROKE);
 
         pdfiumCore = new PdfiumCore(context);
         setWillNotDraw(false);
-
-        mLayer = new RectF();
-        mClipPath = new Path();
-        mPaint = new Paint();
-        mPaint.setColor(Color.WHITE);
-        mPaint.setAntiAlias(true);
     }
 
     private void load(DocumentSource docSource, String password) {
@@ -526,13 +518,19 @@ public class PDFView extends RelativeLayout {
     @Override
     protected void onDetachedFromWindow() {
         recycle();
+        if (renderingHandlerThread != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+                renderingHandlerThread.quitSafely();
+            } else {
+                renderingHandlerThread.quit();
+            }
+            renderingHandlerThread = null;
+        }
         super.onDetachedFromWindow();
     }
 
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
-        mLayer.set(0, 0, w, h);
-        refreshRegion();
         hasSize = true;
         if (waitingDocumentConfigurator != null) {
             waitingDocumentConfigurator.load();
@@ -540,51 +538,34 @@ public class PDFView extends RelativeLayout {
         if (isInEditMode() || state != State.SHOWN) {
             return;
         }
+
+        // calculates the position of the point which in the center of view relative to big strip
+        float centerPointInStripXOffset = -currentXOffset + oldw * 0.5f;
+        float centerPointInStripYOffset = -currentYOffset + oldh * 0.5f;
+
+        float relativeCenterPointInStripXOffset;
+        float relativeCenterPointInStripYOffset;
+
+        if (swipeVertical) {
+            relativeCenterPointInStripXOffset = centerPointInStripXOffset / pdfFile.getMaxPageWidth();
+            relativeCenterPointInStripYOffset = centerPointInStripYOffset / pdfFile.getDocLen(zoom);
+        } else {
+            relativeCenterPointInStripXOffset = centerPointInStripXOffset / pdfFile.getDocLen(zoom);
+            relativeCenterPointInStripYOffset = centerPointInStripYOffset / pdfFile.getMaxPageHeight();
+        }
+
         animationManager.stopAll();
         pdfFile.recalculatePageSizes(new Size(w, h));
+
         if (swipeVertical) {
-            moveTo(currentXOffset, -pdfFile.getPageOffset(currentPage, zoom));
+            currentXOffset = -relativeCenterPointInStripXOffset * pdfFile.getMaxPageWidth() + w * 0.5f;
+            currentYOffset = -relativeCenterPointInStripYOffset * pdfFile.getDocLen(zoom) + h * 0.5f;
         } else {
-            moveTo(-pdfFile.getPageOffset(currentPage, zoom), currentYOffset);
+            currentXOffset = -relativeCenterPointInStripXOffset * pdfFile.getDocLen(zoom) + w * 0.5f;
+            currentYOffset = -relativeCenterPointInStripYOffset * pdfFile.getMaxPageHeight() + h * 0.5f;
         }
+        moveTo(currentXOffset, currentYOffset);
         loadPageByOffset();
-    }
-
-    public void refreshRegion() {
-        int w = (int) mLayer.width();
-        int h = (int) mLayer.height();
-        mClipPath.reset();
-        mClipPath.addRoundRect(new RectF(getPaddingLeft(), getPaddingTop(),
-                w - getPaddingRight(), h - getPaddingBottom()), radii, Path.Direction.CW);
-        mClipPath.moveTo(-mEdgeFix, -mEdgeFix);  // 通过空操作让Path区域占满画布
-        mClipPath.moveTo(w + mEdgeFix, h + mEdgeFix);
-    }
-
-    public void setRadius(int radius) {
-        for (int i = 0; i < radii.length; i++) {
-            radii[i] = radius;
-        }
-        invalidate();
-    }
-
-    @Override
-    protected void dispatchDraw(Canvas canvas) {
-        canvas.saveLayer(mLayer, null, Canvas.ALL_SAVE_FLAG);
-        super.dispatchDraw(canvas);
-        mPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_IN));
-        mPaint.setColor(Color.WHITE);
-        mPaint.setStyle(Paint.Style.FILL);
-        canvas.drawPath(mClipPath, mPaint);
-        canvas.restore();
-    }
-
-    @Override
-    public void draw(Canvas canvas) {
-        refreshRegion();
-        canvas.save();
-        canvas.clipPath(mClipPath);
-        super.draw(canvas);
-        canvas.restore();
     }
 
     @Override
@@ -690,6 +671,7 @@ public class PDFView extends RelativeLayout {
         float currentXOffset = this.currentXOffset;
         float currentYOffset = this.currentYOffset;
         canvas.translate(currentXOffset, currentYOffset);
+
         // Draws thumbnails
         for (PagePart part : cacheManager.getThumbnails()) {
             drawPart(canvas, part);
@@ -789,6 +771,7 @@ public class PDFView extends RelativeLayout {
             canvas.translate(-localTranslationX, -localTranslationY);
             return;
         }
+
         canvas.drawBitmap(renderedBitmap, srcRect, dstRect, paint);
 
         if (Constants.DEBUG_MODE) {
@@ -1183,6 +1166,14 @@ public class PDFView extends RelativeLayout {
         return zoom;
     }
 
+    public boolean getCanZoom() {
+        return canZoom;
+    }
+
+    public void setCanZoom(boolean canZoom) {
+        this.canZoom = canZoom;
+    }
+
     public boolean isZooming() {
         return zoom != minZoom;
     }
@@ -1289,7 +1280,7 @@ public class PDFView extends RelativeLayout {
         return spacingPx;
     }
 
-    public boolean doAutoSpacing() {
+    public boolean isAutoSpacingEnabled() {
         return autoSpacing;
     }
 
@@ -1297,12 +1288,12 @@ public class PDFView extends RelativeLayout {
         this.pageFling = pageFling;
     }
 
-    public boolean doPageFling() {
+    public boolean isPageFlingEnabled() {
         return pageFling;
     }
 
-    private void setSpacing(int spacing) {
-        this.spacingPx = Util.getDP(getContext(), spacing);
+    private void setSpacing(int spacingDp) {
+        this.spacingPx = Util.getDP(getContext(), spacingDp);
     }
 
     private void setAutoSpacing(boolean autoSpacing) {
@@ -1317,7 +1308,15 @@ public class PDFView extends RelativeLayout {
         return pageFitPolicy;
     }
 
-    public boolean doPageSnap() {
+    private void setFitEachPage(boolean fitEachPage) {
+        this.fitEachPage = fitEachPage;
+    }
+
+    public boolean isFitEachPage() {
+        return fitEachPage;
+    }
+
+    public boolean isPageSnap() {
         return pageSnap;
     }
 
@@ -1453,6 +1452,8 @@ public class PDFView extends RelativeLayout {
 
         private FitPolicy pageFitPolicy = FitPolicy.WIDTH;
 
+        private boolean fitEachPage = false;
+
         private boolean pageFling = false;
 
         private boolean pageSnap = false;
@@ -1578,6 +1579,11 @@ public class PDFView extends RelativeLayout {
             return this;
         }
 
+        public Configurator fitEachPage(boolean fitEachPage) {
+            this.fitEachPage = fitEachPage;
+            return this;
+        }
+
         public Configurator pageSnap(boolean pageSnap) {
             this.pageSnap = pageSnap;
             return this;
@@ -1590,6 +1596,11 @@ public class PDFView extends RelativeLayout {
 
         public Configurator nightMode(boolean nightMode) {
             this.nightMode = nightMode;
+            return this;
+        }
+
+        public Configurator disableLongpress() {
+            PDFView.this.dragPinchManager.disableLongpress();
             return this;
         }
 
@@ -1621,6 +1632,7 @@ public class PDFView extends RelativeLayout {
             PDFView.this.setSpacing(spacing);
             PDFView.this.setAutoSpacing(autoSpacing);
             PDFView.this.setPageFitPolicy(pageFitPolicy);
+            PDFView.this.setFitEachPage(fitEachPage);
             PDFView.this.setPageSnap(pageSnap);
             PDFView.this.setPageFling(pageFling);
 

@@ -19,7 +19,6 @@ import android.graphics.RectF;
 
 import com.shockwave.pdfium.PdfDocument;
 
-
 public class LinkTapEvent {
     private float originalX;
     private float originalY;

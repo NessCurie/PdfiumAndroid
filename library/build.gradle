@@ -21,7 +21,7 @@ android {
     }
 }
 dependencies {
-    implementation "com.android.support:support-v4:$supportVersion"
+    compileOnly "com.android.support:support-v4:$supportVersion"
 }
 
 tasks.withType(JavaCompile) {

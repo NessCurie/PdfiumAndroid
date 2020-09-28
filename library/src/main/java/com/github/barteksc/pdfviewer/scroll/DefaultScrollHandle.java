@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.os.Handler;
+import android.support.v4.content.ContextCompat;
 import android.util.TypedValue;
 import android.view.MotionEvent;
 import android.view.ViewGroup;
@@ -60,20 +61,20 @@ public class DefaultScrollHandle extends RelativeLayout implements ScrollHandle 
             height = HANDLE_SHORT;
             if (inverted) { // left
                 align = ALIGN_PARENT_LEFT;
-                background = getResources().getDrawable(R.drawable.default_scroll_handle_left);
+                background = ContextCompat.getDrawable(context, R.drawable.default_scroll_handle_left);
             } else { // right
                 align = ALIGN_PARENT_RIGHT;
-                background = getResources().getDrawable(R.drawable.default_scroll_handle_right);
+                background = ContextCompat.getDrawable(context, R.drawable.default_scroll_handle_right);
             }
         } else {
             width = HANDLE_SHORT;
             height = HANDLE_LONG;
             if (inverted) { // top
                 align = ALIGN_PARENT_TOP;
-                background = getResources().getDrawable(R.drawable.default_scroll_handle_top);
+                background = ContextCompat.getDrawable(context, R.drawable.default_scroll_handle_top);
             } else { // bottom
                 align = ALIGN_PARENT_BOTTOM;
-                background = getResources().getDrawable(R.drawable.default_scroll_handle_bottom);
+                background = ContextCompat.getDrawable(context, R.drawable.default_scroll_handle_bottom);
             }
         }
 
@@ -109,7 +110,9 @@ public class DefaultScrollHandle extends RelativeLayout implements ScrollHandle 
         } else {
             handler.removeCallbacks(hidePageScrollerRunnable);
         }
-        setPosition((pdfView.isSwipeVertical() ? pdfView.getHeight() : pdfView.getWidth()) * position);
+        if (pdfView != null) {
+            setPosition((pdfView.isSwipeVertical() ? pdfView.getHeight() : pdfView.getWidth()) * position);
+        }
     }
 
     private void setPosition(float pos) {
