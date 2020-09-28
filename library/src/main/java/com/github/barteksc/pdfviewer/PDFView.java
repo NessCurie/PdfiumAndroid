@@ -24,7 +24,10 @@ import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Paint;
 import android.graphics.Paint.Style;
 import android.graphics.PaintFlagsDrawFilter;
+import android.graphics.Path;
 import android.graphics.PointF;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffXfermode;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
@@ -70,6 +73,7 @@ import com.shockwave.pdfium.util.SizeF;
 import java.io.File;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -290,6 +294,12 @@ public class PDFView extends RelativeLayout {
      */
     private Configurator waitingDocumentConfigurator;
 
+    public float[] radii = {0, 0, 0, 0, 0, 0, 0, 0};  // top-left, top-right, bottom-right, bottom-left
+    public Path mClipPath;                            // 剪裁区域路径
+    public Paint mPaint;                              // 画笔
+    public int mEdgeFix = 10;                        // 边缘修复
+    public RectF mLayer;                             // 画布图层大小
+
     /**
      * Construct the initial view
      */
@@ -308,11 +318,18 @@ public class PDFView extends RelativeLayout {
         pagesLoader = new PagesLoader(this);
 
         paint = new Paint();
+        paint.setAntiAlias(true);
         debugPaint = new Paint();
         debugPaint.setStyle(Style.STROKE);
 
         pdfiumCore = new PdfiumCore(context);
         setWillNotDraw(false);
+
+        mLayer = new RectF();
+        mClipPath = new Path();
+        mPaint = new Paint();
+        mPaint.setColor(Color.WHITE);
+        mPaint.setAntiAlias(true);
     }
 
     private void load(DocumentSource docSource, String password) {
@@ -531,6 +548,8 @@ public class PDFView extends RelativeLayout {
 
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        mLayer.set(0, 0, w, h);
+        refreshRegion();
         hasSize = true;
         if (waitingDocumentConfigurator != null) {
             waitingDocumentConfigurator.load();
@@ -566,6 +585,41 @@ public class PDFView extends RelativeLayout {
         }
         moveTo(currentXOffset, currentYOffset);
         loadPageByOffset();
+    }
+
+    public void refreshRegion() {
+        int w = (int) mLayer.width();
+        int h = (int) mLayer.height();
+        mClipPath.reset();
+        mClipPath.addRoundRect(new RectF(getPaddingLeft(), getPaddingTop(),
+                w - getPaddingRight(), h - getPaddingBottom()), radii, Path.Direction.CW);
+        mClipPath.moveTo(-mEdgeFix, -mEdgeFix);  // 通过空操作让Path区域占满画布
+        mClipPath.moveTo(w + mEdgeFix, h + mEdgeFix);
+    }
+
+    public void setRadius(int radius) {
+        Arrays.fill(radii, radius);
+        invalidate();
+    }
+
+    @Override
+    protected void dispatchDraw(Canvas canvas) {
+        canvas.saveLayer(mLayer, null, Canvas.ALL_SAVE_FLAG);
+        super.dispatchDraw(canvas);
+        mPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_IN));
+        mPaint.setColor(Color.WHITE);
+        mPaint.setStyle(Paint.Style.FILL);
+        canvas.drawPath(mClipPath, mPaint);
+        canvas.restore();
+    }
+
+    @Override
+    public void draw(Canvas canvas) {
+        refreshRegion();
+        canvas.save();
+        canvas.clipPath(mClipPath);
+        super.draw(canvas);
+        canvas.restore();
     }
 
     @Override
